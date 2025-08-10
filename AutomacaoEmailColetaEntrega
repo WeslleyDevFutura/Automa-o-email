@@ -122,12 +122,23 @@ entregas = df_final[df_final['TIPO'] == 'ENTREGA']
 html_coletas = centralizar_cabecalho(coletas)
 html_entregas = centralizar_cabecalho(entregas)
 
+# Definir saudação conforme a hora atual
+hora_atual = datetime.now().hour
+if 12 <= hora_atual < 18:
+    saudacao = "Boa tarde"
+elif 18 <= hora_atual <= 23:
+    saudacao = "Boa noite"
+else:
+    saudacao = "Bom dia"
+
 mensagem_html = f"""
-<p>Bom dia.</p>
-<p>Hoje temos <b>{len(coletas)}</b> coletas e <b>{len(entregas)}</b> entregas . Segue lista abaixo:</p>
+<p>{saudacao}.</p>
+<p>Hoje temos <b>{len(coletas)}</b> coletas e <b>{len(entregas)}</b> entregas. Temos {len(coletas) + len(entregas)} carregamentos.</p>
+<p>Essas são as <b>{len(coletas)}</b> coletas para hoje. Segue lista abaixo:</p>
+
 {html_coletas}
 <br>
-<p>Temos também <b>{len(entregas)}</b> entregas para hoje. Segue lista abaixo:</p>
+<p>Essas são as <b>{len(entregas)}</b> entregas para hoje. Segue lista abaixo:</p>
 {html_entregas}
 """
 
