@@ -1,0 +1,158 @@
+import pandas as pd
+from datetime import datetime
+import os
+import re
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
+
+# ====== CONFIGURAÇÕES ======
+ARQUIVO_ORIGINAL = r"C:\Users\wesll\OneDrive\Desktop\planilha_coleta.xlsx"
+
+EMAIL_REMETENTE = "xxxx@xxxx.com.br"
+SENHA_EMAIL = "****"  # Senha ou senha de app
+EMAIL_DESTINATARIO = "xxxx@gmail.com"
+SMTP_SERVIDOR = "smtp.xxx.com.br"
+SMTP_PORTA = 587
+
+# ====== ETAPA 1 - TRATAMENTO ======
+df = pd.read_excel(ARQUIVO_ORIGINAL)
+df['DATA_INCLUSAO'] = pd.to_datetime(df['DATA_INCLUSAO'], errors='coerce')
+
+# Lista de remetentes indesejados
+remetentes_indesejados = [
+    "AMAZON LOGISTICA DO BRASIL LTD",
+    "JADLOG LOGISTICA S.A",
+    "MERCADO ENVIOS SERVICOS DE LOG",
+    "SHPX LOGISTICA LTDA."
+]
+padrao = '|'.join([re.escape(r) for r in remetentes_indesejados])
+df_filtrado = df[~df['REMETENTE'].str.contains(padrao, case=False, na=False)]
+
+# Remove canceladas e cargas declinadas
+df_filtrado = df_filtrado[df_filtrado['SITUACAO'].str.upper() != 'CANCELADA']
+df_filtrado = df_filtrado[df_filtrado['ULTIMA_OCORRENCIA'].str.strip() != '8 - CARGA DECLINADA PELO CLIENTE']
+
+# Seleciona colunas e renomeia
+colunas_desejadas = [
+    "NUMERO_COLETA", "COTACAO", "DATA_INCLUSAO", "HORA_INCLUSAO", "USUARIO", "PAGADOR", 
+    "SITUACAO", "DATA_ULTIMA_OCORRENCIA", "HORA_ULTIMA_OCORRENCIA", "USUARIO_ULTIMA_OCORRENCIA",
+    "ULTIMA_OCORRENCIA", "OBSERVACAO_2"
+]
+df_final = df_filtrado[colunas_desejadas].rename(columns={
+    "NUMERO_COLETA": "Coleta",
+    "DATA_INCLUSAO": "DataInc",
+    "HORA_INCLUSAO": "HoraInc",
+    "USUARIO": "Login",
+    "DATA_ULTIMA_OCORRENCIA": "DataUlt",
+    "HORA_ULTIMA_OCORRENCIA": "HoraUlt",
+    "ULTIMA_OCORRENCIA": "Ult.Oco",
+    "USUARIO_ULTIMA_OCORRENCIA": "LoginUlt"
+}).copy()
+
+# Formata DataInc
+df_final['DataInc'] = pd.to_datetime(df_final['DataInc'], errors='coerce').dt.strftime('%d/%m/%Y')
+
+# Extrai datas e horas de coleta e entrega
+coleta_entrega = df_final['OBSERVACAO_2'].str.extract(
+    r'(\d{2}/\d{2}/\d{4}) (\d{2}:\d{2}) - (\d{2}/\d{2}/\d{4}) (\d{2}:\d{2})'
+)
+coleta_entrega.columns = ['DataCol', 'HoraCol', 'DataEnt', 'HoraEnt']
+
+# Junta no df final
+df_final = pd.concat([df_final.drop(columns=['OBSERVACAO_2']), coleta_entrega], axis=1)
+
+# ====== NOVA COLUNA COM BASE NO CÓDIGO ======
+mapeamento = {
+    '97': 'Ag.Contratação',
+    '98': 'Ag.Contratação',
+    '35': 'Ag.Coleta',
+    '81': 'Em Gr',
+    '17': 'Ag.Descarga',
+    '34': 'AE.Emitida',
+    '03': 'Ag.Emissão'
+}
+df_final['CodigoOco'] = df_final['Ult.Oco'].str.split('-').str[0].str.strip()
+df_final['DescricaoOco'] = df_final['CodigoOco'].map(mapeamento)
+
+# REMOVE A COLUNA CodigoOco antes de salvar e enviar
+df_final = df_final.drop(columns=['CodigoOco'])
+
+# Função para centralizar cabeçalho no HTML
+def centralizar_cabecalho(df):
+    html = df.to_html(index=False, escape=False)
+    html = html.replace('<th>', '<th style="text-align:center">')
+    return html
+
+# Data de hoje
+data_hoje = datetime.today().strftime('%d/%m/%Y')
+
+# Filtra apenas coletas ou entregas de hoje
+df_final = df_final[
+    (df_final['DataCol'] == data_hoje) |
+    (df_final['DataEnt'] == data_hoje)
+]
+
+# Define tipo
+df_final['TIPO'] = df_final.apply(
+    lambda x: 'COLETA' if x['DataCol'] == data_hoje else 'ENTREGA',
+    axis=1
+)
+
+# Ordena por hora
+df_final['HORA_BASE'] = df_final.apply(
+    lambda x: x['HoraCol'] if x['TIPO'] == 'COLETA' else x['HoraEnt'],
+    axis=1
+)
+df_final = df_final.sort_values(
+    by='HORA_BASE',
+    key=lambda col: pd.to_datetime(col, format='%H:%M', errors='coerce')
+).drop(columns=['HORA_BASE'])
+
+# Salva planilha (sem a coluna CodigoOco)
+arquivo_saida = os.path.join(os.path.expanduser("~"), "Downloads", "coletas_entregas.xlsx")
+df_final.to_excel(arquivo_saida, index=False)
+
+# ====== ETAPA 2 - MONTA HTML ======
+coletas = df_final[df_final['TIPO'] == 'COLETA']
+entregas = df_final[df_final['TIPO'] == 'ENTREGA']
+
+html_coletas = centralizar_cabecalho(coletas)
+html_entregas = centralizar_cabecalho(entregas)
+
+mensagem_html = f"""
+<p>Bom dia.</p>
+<p>Hoje temos <b>{len(coletas)}</b> coletas e <b>{len(entregas)}</b> entregas . Segue lista abaixo:</p>
+{html_coletas}
+<br>
+<p>Temos também <b>{len(entregas)}</b> entregas para hoje. Segue lista abaixo:</p>
+{html_entregas}
+"""
+
+# ====== ETAPA 3 - ENVIO DE E-MAIL ======
+msg = MIMEMultipart()
+msg["Subject"] = f"Coletas e Entregas - {data_hoje}"
+msg["From"] = EMAIL_REMETENTE
+msg["To"] = EMAIL_DESTINATARIO
+msg.attach(MIMEText(mensagem_html, "html"))
+
+# Anexa arquivo
+with open(arquivo_saida, "rb") as f:
+    parte = MIMEBase("application", "octet-stream")
+    parte.set_payload(f.read())
+encoders.encode_base64(parte)
+parte.add_header(
+    "Content-Disposition",
+    f"attachment; filename={os.path.basename(arquivo_saida)}"
+)
+msg.attach(parte)
+
+# Envia e-mail
+with smtplib.SMTP(SMTP_SERVIDOR, SMTP_PORTA) as server:
+    server.starttls()
+    server.login(EMAIL_REMETENTE, SENHA_EMAIL)
+    server.sendmail(EMAIL_REMETENTE, EMAIL_DESTINATARIO, msg.as_string())
+
+print("✅ E-mail enviado com sucesso!")
