@@ -77,17 +77,12 @@ mapeamento = {
     '35': 'Ag.Coleta',
     '50': 'Acompanhar Coleta',
     '17': 'Ag.Descarga',
-    
-    '03': 'Ag.AE',
+    '3': 'Ag.AE',
     '30': 'Entregue',
     '11': 'Finalizada',
 }
 df_final['CodigoOco'] = df_final['Ult.Oco'].str.split('-').str[0].str.strip()
 df_final['DescricaoOco'] = df_final['CodigoOco'].map(mapeamento)
-
-# REMOVE A COLUNA CodigoOco antes de salvar e enviar
-df_final = df_final.drop(colu
-                         mns=['CodigoOco'])
 
 # Função para centralizar cabeçalho no HTML
 def centralizar_cabecalho(df):
@@ -120,18 +115,25 @@ df_final = df_final.sort_values(
     key=lambda col: pd.to_datetime(col, format='%H:%M', errors='coerce')
 ).drop(columns=['HORA_BASE'])
 
-# Salva planilha (sem a coluna CodigoOco)
-arquivo_saida = os.path.join(os.path.expanduser("~"), "Downloads", "coletas_entregas.xlsx")
-df_final.to_excel(arquivo_saida, index=False)
-
-# ====== ETAPA 2 - MONTA HTML ======
+# ====== LISTAS PARA O EMAIL ======
 coletas = df_final[df_final['TIPO'] == 'COLETA']
 entregas = df_final[df_final['TIPO'] == 'ENTREGA']
 
+# HTML geral
 html_coletas = centralizar_cabecalho(coletas)
 html_entregas = centralizar_cabecalho(entregas)
 
-# Definir saudação conforme a hora atual
+# Filtrar as que precisam acompanhamento
+codigos_coleta_acomp = ['97', '98', '80', '81', '82','50']
+codigos_entrega_acomp = ['34', '10','97', '98', '80', '81', '82','50']
+
+coletas_acomp = coletas[coletas['CodigoOco'].isin(codigos_coleta_acomp)]
+entregas_acomp = entregas[entregas['CodigoOco'].isin(codigos_entrega_acomp)]
+
+html_coletas_acomp = centralizar_cabecalho(coletas_acomp)
+html_entregas_acomp = centralizar_cabecalho(entregas_acomp)
+
+# ====== Saudação ======
 hora_atual = datetime.now().hour
 if 12 <= hora_atual < 18:
     saudacao = "Boa tarde"
@@ -140,16 +142,30 @@ elif 18 <= hora_atual <= 23:
 else:
     saudacao = "Bom dia"
 
+# ====== Corpo do e-mail ======
 mensagem_html = f"""
 <p>{saudacao}.</p>
-<p>Hoje temos <b>{len(coletas)}</b> coletas e <b>{len(entregas)}</b> entregas. Temos {len(coletas) + len(entregas)} carregamentos.</p>
-<p>Essas são as <b>{len(coletas)}</b> coletas para hoje. Segue lista abaixo:</p>
+<p>Hoje temos <b>{len(coletas)}</b> coletas e <b>{len(entregas)}</b> entregas. Total de <b>{len(coletas) + len(entregas)}</b> carregamentos.</p>
 
+<h3>📦 Coletas ({len(coletas)}):</h3>
 {html_coletas}
 <br>
-<p>Essas são as <b>{len(entregas)}</b> entregas para hoje. Segue lista abaixo:</p>
+
+<h3>📦 Entregas ({len(entregas)}):</h3>
 {html_entregas}
+<br>
+
+<h3>🚨 Coletas que precisam acompanhamento ({len(coletas_acomp)}):</h3>
+{html_coletas_acomp}
+<br>
+
+<h3>🚨 Entregas que precisam acompanhamento ({len(entregas_acomp)}):</h3>
+{html_entregas_acomp}
 """
+
+# ====== Salva planilha (sem a coluna CodigoOco) ======
+arquivo_saida = os.path.join(os.path.expanduser("~"), "Downloads", "coletas_entregas.xlsx")
+df_final.drop(columns=['CodigoOco']).to_excel(arquivo_saida, index=False)
 
 # ====== ETAPA 3 - ENVIO DE E-MAIL ======
 msg = MIMEMultipart()
